@@ -1,0 +1,118 @@
+import streamlit as st
+import pyrebase
+import random
+import pandas as pd
+
+# Firebase config (replace with your actual values)
+config = {
+  "apiKey": "AIzaSyDb0eVpzzz8IFDPaj760ofBH1iuTHWEcq4",
+  "authDomain": "restaurant-voting-app.firebaseapp.com",
+  "databaseURL": "https://restaurant-voting-app-default-rtdb.firebaseio.com",
+  "projectId": "restaurant-voting-app",
+  "storageBucket": "restaurant-voting-app.firebasestorage.app",
+  "messagingSenderId": "278762911668",
+  "appId": "1:278762911668:web:cef60f2cbb2e774d2664e1",
+  "measurementId": "G-2YF5120MFV"
+}
+
+st.title("What to eat?")
+
+firebase = pyrebase.initialize_app(config)
+db = firebase.database()
+
+uploaded_file = st.file_uploader("Upload an excel file", type="xlsx")
+if uploaded_file is not None:
+    df = pd.read_excel(uploaded_file)
+    categories = df.columns.tolist()
+    category = st.selectbox('Choose restaurant column', categories)
+else:
+    st.write('Waiting for document to be uploaded')
+    st.stop()
+
+
+# Initialize session state
+if "index" not in st.session_state:
+    st.session_state.index = 0
+if "prev_username" not in st.session_state:
+    st.session_state.prev_username = ""
+if "category" not in st.session_state:
+    st.session_state.category = None
+
+# User login
+username = st.text_input("Enter your name to start voting:")
+
+# Reset session if new user or new category
+if username and (username != st.session_state.prev_username or category != st.session_state.category):
+    st.session_state.index = 0
+    st.session_state.prev_username = username
+    st.session_state.category = category
+
+    # Clear user's previous votes
+    votes = db.child("votes").get()
+    if votes.each():
+        for item in votes.each():
+            r_name = item.key()
+            db.child("votes").child(r_name).child(username).remove()
+
+    # Check if selected list exists for this category
+    selected = db.child("selected_restaurants").child(category).get()
+    if not selected.val():
+        restaurant_list = df[category].dropna().tolist()
+        chosen = random.sample(restaurant_list, min(5, len(restaurant_list)))
+        db.child("selected_restaurants").child(category).set(chosen)
+    else:
+        chosen = selected.val()
+else:
+    # Load existing selection
+    selected = db.child("selected_restaurants").child(category).get()
+    chosen = selected.val() if selected.val() else []
+
+# Voting logic
+if username and chosen:
+    current_index = st.session_state.index
+
+    if current_index < len(chosen):
+        current_restaurant = chosen[current_index]
+        st.header(f"Want to eat at: {current_restaurant}?")
+        vote = st.radio("Your vote:", ["Yes", "No"], key=current_restaurant)
+
+        if st.button("Submit Vote"):
+            db.child("votes").child(current_restaurant).update({username: vote})
+            st.session_state.index += 1
+            st.rerun()
+    else:
+        st.success("You've voted on all restaurants!")
+
+        # Show matches
+        st.header("Restaurants all users liked:")
+        votes = db.child("votes").get()
+        matched_restaurants =[]
+        if votes.each():
+            for item in votes.each():
+                r_name = item.key()
+                user_votes = item.val()
+                if len(user_votes) >= 2 and all(v == "Yes" for v in user_votes.values()):
+                    matched_restaurants.append(r_name)
+        if matched_restaurants:
+            for r in matched_restaurants:
+                st.write(f"✅ {r}")
+        else:
+            st.warning('No restaurants were agreed on by all users. You need to restart')
+            if st.button('Click here to restart'):
+                db.child('votes').remove()
+                    
+                restaurant_list = df[category].dropna().tolist()
+                new_selection = random.sample(restaurant_list, min(5, len(restaurant_list)))
+                db.child("selected_restaurants").child(category).set(new_selection)
+
+                st.session_state.index=0
+                st.rerun()
+
+
+# Admin reset button
+if username == "admin":
+    if st.button("Reset Voting and Restaurant List"):
+        db.child("votes").remove()
+        db.child("selected_restaurants").remove()
+        st.session_state.index = 0
+        st.success("Voting and restaurant list reset!")
