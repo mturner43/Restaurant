@@ -3,7 +3,7 @@ import pyrebase
 import random
 import pandas as pd
 
-# Firebase config (replace with your actual values)
+# Firebase config 
 config = {
   "apiKey": "AIzaSyDb0eVpzzz8IFDPaj760ofBH1iuTHWEcq4",
   "authDomain": "restaurant-voting-app.firebaseapp.com",
@@ -17,18 +17,33 @@ config = {
 
 st.title("What to eat?")
 
+st.markdown(
+'Start by either uploading an excel file with options or typing in options in the text box.'
+
+)
+
 firebase = pyrebase.initialize_app(config)
 db = firebase.database()
 
-uploaded_file = st.file_uploader("Upload an excel file", type="xlsx")
-if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file)
-    categories = df.columns.tolist()
-    category = st.selectbox('Choose restaurant column', categories)
-else:
-    st.write('Waiting for document to be uploaded')
-    st.stop()
+options = st.radio("Create Restaurant List: ", ["Upload file","Enter manually"])
 
+if options == 'Upload file':
+    uploaded_file = st.file_uploader("Upload an excel file", type="xlsx")
+    if uploaded_file is not None:
+        df = pd.read_excel(uploaded_file)
+        categories = df.columns.tolist()
+        category = st.selectbox('Choose restaurant column', categories)
+    else:
+        st.write('Waiting for document to be uploaded')
+        st.stop()
+else:
+    user_input = st.text_input("Type out restaurants separated by commas:")
+    if user_input:
+        restaurant_list = [item.strip() for item in user_input.split(",") if item.strip()]
+        category = "manual_input"
+    else:
+        st.write('')
+        st.stop()
 
 # Initialize session state
 if "index" not in st.session_state:
@@ -57,7 +72,12 @@ if username and (username != st.session_state.prev_username or category != st.se
     # Check if selected list exists for this category
     selected = db.child("selected_restaurants").child(category).get()
     if not selected.val():
-        restaurant_list = df[category].dropna().tolist()
+        #restaurant_list = df[category].dropna().tolist()
+        #restaurant_list = category
+        if options == 'Upload file':
+            restaurant_list = df[category].dropna().tolist()
+        else:
+            restaurant_list = restaurant_list
         chosen = random.sample(restaurant_list, min(5, len(restaurant_list)))
         db.child("selected_restaurants").child(category).set(chosen)
     else:
@@ -83,30 +103,43 @@ if username and chosen:
     else:
         st.success("You've voted on all restaurants!")
 
-        # Show matches
-        st.header("Restaurants all users liked:")
-        votes = db.child("votes").get()
-        matched_restaurants =[]
-        if votes.each():
-            for item in votes.each():
-                r_name = item.key()
-                user_votes = item.val()
-                if len(user_votes) >= 2 and all(v == "Yes" for v in user_votes.values()):
-                    matched_restaurants.append(r_name)
-        if matched_restaurants:
-            for r in matched_restaurants:
-                st.write(f"✅ {r}")
-        else:
-            st.warning('No restaurants were agreed on by all users. You need to restart')
-            if st.button('Click here to restart'):
-                db.child('votes').remove()
-                    
-                restaurant_list = df[category].dropna().tolist()
-                new_selection = random.sample(restaurant_list, min(5, len(restaurant_list)))
-                db.child("selected_restaurants").child(category).set(new_selection)
+        votes = db.child('votes').get()
+        all_votes = votes.val() if votes.val() else {}
 
-                st.session_state.index=0
-                st.rerun()
+        unique_users = set()
+        for restaurant_votes in all_votes.values():
+            unique_users.update(restaurant_votes.keys())
+
+        if len(unique_users)<2:
+            st.warning("Waiting on others to submit their votes")
+        else:
+            # Show matches
+            st.header("Restaurants all users liked:")
+            votes = db.child("votes").get()
+            matched_restaurants =[]
+            if votes.each():
+                for item in votes.each():
+                    r_name = item.key()
+                    user_votes = item.val()
+                    if len(user_votes) >= 2 and all(v == "Yes" for v in user_votes.values()):
+                        matched_restaurants.append(r_name)
+            if matched_restaurants:
+                for r in matched_restaurants:
+                    st.write(f"✅ {r}")
+                if st.toggle('Pick for us'):
+                    pick = random.sample(matched_restaurants,1)
+                    st.write(f'You should go to :blue[{pick[0]}]')
+            else:
+                st.warning('No restaurants were agreed on by all users. You need to restart')
+                if st.button('Click here to restart'):
+                    db.child('votes').remove()
+                        
+                    restaurant_list = df[category].dropna().tolist()
+                    new_selection = random.sample(restaurant_list, min(5, len(restaurant_list)))
+                    db.child("selected_restaurants").child(category).set(new_selection)
+
+                    st.session_state.index=0
+                    st.rerun()
 
 
 # Admin reset button
